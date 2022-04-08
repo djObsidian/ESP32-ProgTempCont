@@ -1,0 +1,23 @@
+{
+    "WiFi_SSID": "testwifiname",
+    "WiFi_Pass": "12345",
+    "WiFi_Mode": 0,
+    "Local_JS": 1,
+    "Auth": 0,
+    "Auth_name": "admin",
+    "Auth_pass": "pass",
+    "NTP_Server1": "us.pool.ntp.org",
+    "NTP_Server2": "0.pl.pool.ntp.org",
+    "GTM_TimeOffset": 3,
+    "Initial_Date": "2022-01-28",
+    "Initial_Time": "11:00:00",
+    "PID_Kp": 4.00,
+    "PID_Ki": 0.10,
+    "PID_Kd": 20.00,
+    "Min_Temp": 0.0,
+    "Max_Temp": 1050,
+    "Min_Dev_Temp": -20,
+    "Max_Dev_Temp": 50,
+    "Thermal_Runaway": 0,
+    "TC_Type": "K"
+}
