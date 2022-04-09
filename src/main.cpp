@@ -51,6 +51,22 @@ int8_t cjHighLimit = 50;
 int8_t cjLowLimit = 10;
 
 
+int WiFi_Mode; // WiFi Mode: 0 - Connect to AP; 1 - Connect to AP, be AP if failed; 2 - Be only AP; 3 - No WiFi
+int LocalJS; // 0 - Use CDN; 1 - Use local js libraries
+int Auth;// 0 - no HTTP auth; 1 - Use http auth
+
+char Auth_name[64];
+char Auth_pass[64];
+
+int GTM_TimeOffset;
+char Initial_Time[8]; //hh:mm
+char Initial_Date[11]; //yyyy-mm-dd
+//P.S. ORDER MATTERS. Why? Because it doesn't works in reverse, fuck it
+
+
+int ThermalRunaway = 0; //How long wait for temperature to rise before considering an error
+
+
 //====Private variables====
 
 unsigned int localPort = 8888;
@@ -79,9 +95,11 @@ void setup() {
     return;
   }
   LoadSettings(SPIFFS);
-  SetupWifi();
-  SetupNTPSync();
-  SetupMax31856();
+  //SetupWifi();
+  //SaveSettings(SPIFFS);
+  //LoadSettings(SPIFFS);
+  //SetupNTPSync();
+  //SetupMax31856();
   //xTaskCreate(T_UpdateTemperature,"Temp update",8192,NULL,1,NULL);
   //xTaskCreate(T_ProgramLoop,"Control loop",8192,NULL,1,NULL);
   //StartProgram("test.txt");
@@ -396,6 +414,7 @@ void HandleSensorFault(){
 }
 
 void LoadSettings(fs::FS &fs){
+
   File confFile = fs.open("/etc/config.txt");
   if(!confFile || confFile.isDirectory()) {
     debugLogSerial("Failed to open config file");
@@ -412,16 +431,21 @@ void LoadSettings(fs::FS &fs){
   strcpy(pass,doc["WiFi_Pass"]);
   Serial.println(ssid);
   Serial.println(pass);
-  //int WiFi_Mode = doc["WiFi_Mode"]; // 0
-  //int LocalJS = doc["LocalJS"]; // 1
-  //int Auth = doc["Auth"]; // 0
-  //const char* Auth_name = doc["Auth_name"]; // "admin"
-  //const char* Auth_pass = doc["Auth_pass"]; // "pass"
+  WiFi_Mode = doc["WiFi_Mode"];
+
+  LocalJS = doc["Local_JS"].as<int>();
+  Auth = doc["Auth"];
+  strcpy(Auth_name,doc["Auth_name"]);
+  strcpy(Auth_pass,doc["Auth_pass"]);
+
   strcpy(NTP_Server1, doc["NTP_Server1"]);
   strcpy(NTP_Server2, doc["NTP_Server2"]);
-  //int GTM_TimeOffset = doc["GTM_TimeOffset"]; // 3
-  //const char* Initial_Date = doc["Initial_Date"]; // "2022-01-28"
-  //const char* Initial_Time = doc["Initial_Time"]; // "11:00:00"
+  GTM_TimeOffset = doc["GTM_TimeOffset"]; 
+  const char* Initial_Date2 = doc["Initial_Date"];
+  memcpy(Initial_Date, Initial_Date2, 11);  
+  strcpy(Initial_Time,doc["Initial_Time"]);
+  
+
 
   Kp = doc["PID_Kp"];
   Ki = doc["PID_Ki"];
@@ -431,8 +455,7 @@ void LoadSettings(fs::FS &fs){
   tcHighLimit = doc["Max_Temp"].as<float>();
   cjLowLimit = doc["Min_Dev_Temp"].as<int8_t>();
   cjHighLimit = doc["Max_Dev_Temp"].as<int8_t>();
-  //debugLogSerial("Limits: %f, %f, %i, %i",tcLowLimit,tcHighLimit,cjLowLimit,cjHighLimit);
-  //int ThermalRunaway = doc["ThermalRunaway"]; // 0
+  ThermalRunaway = doc["Thermal_Runaway"];
 
   char TC_Type = doc["TC_Type"].as<char>();
   switch (TC_Type)
@@ -462,16 +485,66 @@ void LoadSettings(fs::FS &fs){
     break;
   }
 
+  confFile.close();
 
 
-  //serializeJsonPretty(doc,Serial);
+  debugLogSerial("Json readed from settings: ");
+  serializeJsonPretty(doc,Serial);
 
 
 
 
 }
 
-void SaveSettings(){
+void SaveSettings(fs::FS &fs){
+  File confFile = fs.open("/etc/config.txt");
+  if(!confFile || confFile.isDirectory()) {
+    debugLogSerial("Failed to open config file");
+    return;
+  }
+  confFile.close();
+  fs.remove("/etc/config.txt");
+  File confFile1 = fs.open("/etc/config.txt",FILE_WRITE);
+  
+  StaticJsonDocument<512> doct;
+  doct["WiFi_SSID"] = ssid;
+  doct["WiFi_Pass"] = pass;
+  doct["WiFi_Mode"] = WiFi_Mode;
+  doct["Local_JS"] = LocalJS;
+  doct["Auth"] = Auth;
+  doct["Auth_name"] = Auth_name;
+  doct["Auth_pass"] = Auth_pass;
+  doct["NTP_Server1"] = NTP_Server1;
+  doct["NTP_Server2"] = NTP_Server2;
+  doct["GTM_TimeOffset"] = GTM_TimeOffset;
+  doct["Initial_Date"] = Initial_Date;
+  doct["Initial_Time"] = Initial_Time;
+  doct["PID_Kp"] = Kp;
+  doct["PID_Ki"] = Ki;
+  doct["PID_Kd"] = Kd;
+  doct["Min_Temp"] = tcLowLimit;
+  doct["Max_Temp"] = tcHighLimit;
+  doct["Min_Dev_Temp"] = cjLowLimit;
+  doct["Max_Dev_Temp"] = cjHighLimit;
+  doct["Thermal_Runaway"] = ThermalRunaway;
+
+  switch (thermocoupleType) {
+    case MAX31856_TCTYPE_B: doct["TC_Type"] = "B"; break;
+    case MAX31856_TCTYPE_E: doct["TC_Type"] = "E"; break;
+    case MAX31856_TCTYPE_J: doct["TC_Type"] = "J"; break;
+    case MAX31856_TCTYPE_K: doct["TC_Type"] = "K"; break;
+    case MAX31856_TCTYPE_N: doct["TC_Type"] = "N"; break;
+    case MAX31856_TCTYPE_R: doct["TC_Type"] = "R"; break;
+    case MAX31856_TCTYPE_S: doct["TC_Type"] = "S"; break;
+    case MAX31856_TCTYPE_T: doct["TC_Type"] = "T"; break;
+    default: Serial.println("Unknown"); break;
+  }
+
+  debugLogSerial("Json formed from settings: ");
+  serializeJsonPretty(doct,Serial);
+  serializeJsonPretty(doct,confFile1);
+  confFile1.close();
+
 
 }
 
