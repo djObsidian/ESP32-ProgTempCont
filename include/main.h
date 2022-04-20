@@ -24,6 +24,9 @@
 #define RISE_DISCR_T_STEP 5 //Rise time discretisation step duration, minutes
 #define RISE_DISCR_STEP 10
 
+#define LOG_PERIOD 30 //Logging period in seconds
+#define LOG_FILE_LIMIT 10 //Maximum amount of log files. After exeded old logs are deleted
+
 #define TC_ERROR_TRESHOLD 5 //How many times we should encounter error in a row before we are sure that that's not a missread
 
 typedef struct{
@@ -69,11 +72,16 @@ void LoadSettings(fs::FS &fs);
 void SaveSettings(fs::FS &fs);
 
 //programm control related functions
-
-void StartProgram(const char *progname);
+void LoadProgram(const char *progname);
+void StartProgram();
 void AbortProgram();
 
 void T_ProgramLoop(void *params);
+
+//logging
+void CreateLogFile(fs::FS &fs, time_t starttime);
+void WriteLog(fs::FS &fs, time_t starttime);
+void ClearLogs(fs::FS &fs);
 
 //helpers
 double lerp(double x0, double x1, double y0, double y1, double x);

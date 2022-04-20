@@ -25,6 +25,7 @@ char programFileName[64];
 
 time_t progStartTime;
 time_t progEndTime;
+uint16_t programFullDuration = 0; //Full programm duration in minutes
 
 
 //====Config variables====
@@ -41,8 +42,6 @@ char pass[64];
 char NTP_Server1[64];
 char NTP_Server2[64];
 int timeZone = 3; 
-
-static const char ntpServerName[] = "us.pool.ntp.org";
 
 
 float tcHighLimit = 1050.0f;
@@ -95,14 +94,14 @@ void setup() {
     return;
   }
   LoadSettings(SPIFFS);
-  //SetupWifi();
-  //SaveSettings(SPIFFS);
-  //LoadSettings(SPIFFS);
-  //SetupNTPSync();
-  //SetupMax31856();
-  //xTaskCreate(T_UpdateTemperature,"Temp update",8192,NULL,1,NULL);
-  //xTaskCreate(T_ProgramLoop,"Control loop",8192,NULL,1,NULL);
-  //StartProgram("test.txt");
+  SetupWifi();
+  SetupNTPSync();
+  SetupMax31856();
+  ClearLogs(SPIFFS);
+  xTaskCreate(T_UpdateTemperature,"Temp update",8192,NULL,1,NULL);
+  xTaskCreate(T_ProgramLoop,"Control loop",8192,NULL,1,NULL);
+  //LoadProgram("test.txt");
+  //StartProgram();
   //xTaskCreate(T_DisplayTime,"Debug time display",8192,NULL,1,NULL);
 }
 /*--------------------------------------------------------*/
@@ -183,18 +182,15 @@ time_t getNtpTime()
   IPAddress ntpServerIP; // NTP server's ip address
 
   while (Udp.parsePacket() > 0) ; // discard any previously received packets
-  Serial.println("Transmit NTP Request");
-  // get a random server from the pool
-  WiFi.hostByName(ntpServerName, ntpServerIP);
-  Serial.print(ntpServerName);
-  Serial.print(": ");
-  Serial.println(ntpServerIP);
+  debugLogSerial("[TIME]Transmit NTP Request");
+  WiFi.hostByName(NTP_Server1, ntpServerIP);
+  debugLogSerial("[TIME] %s : %s", NTP_Server1, ntpServerIP.toString().c_str());
   sendNTPpacket(ntpServerIP);
   uint32_t beginWait = millis();
   while (millis() - beginWait < 1500) {
     int size = Udp.parsePacket();
     if (size >= NTP_PACKET_SIZE) {
-      Serial.println("Receive NTP Response");
+      debugLogSerial("[TIME] Receive NTP Response");
       Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
       unsigned long secsSince1900;
       // convert four bytes starting at location 40 to a long integer
@@ -205,8 +201,29 @@ time_t getNtpTime()
       return secsSince1900 - 2208988800UL + timeZone * SECS_PER_HOUR;
     }
   }
-  Serial.println("No NTP Response :-(");
+  debugLogSerial("[TIME] No NTP Response. Trying another server");
+  debugLogSerial("[TIME]Transmit NTP Request");
+  WiFi.hostByName(NTP_Server2, ntpServerIP);
+  debugLogSerial("[TIME] %s : %s", NTP_Server2, ntpServerIP.toString().c_str());
+  sendNTPpacket(ntpServerIP);
+  beginWait = millis();
+  while (millis() - beginWait < 1500) {
+    int size = Udp.parsePacket();
+    if (size >= NTP_PACKET_SIZE) {
+      debugLogSerial("[TIME] Receive NTP Response");
+      Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
+      unsigned long secsSince1900;
+      // convert four bytes starting at location 40 to a long integer
+      secsSince1900 =  (unsigned long)packetBuffer[40] << 24;
+      secsSince1900 |= (unsigned long)packetBuffer[41] << 16;
+      secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
+      secsSince1900 |= (unsigned long)packetBuffer[43];
+      return secsSince1900 - 2208988800UL + timeZone * SECS_PER_HOUR;
+    }
+  }
+  debugLogSerial("[TIME] No NTP Response");
   return 0; // return 0 if unable to get the time
+  //Add a SEPARATE function for initial setup. If we cant sync with NTP - DO NOT ATTEMPT TO SYNC AT ALL
 }
 
 // send an NTP request to the time server at the given address
@@ -277,7 +294,7 @@ void SetupNTPSync(){
   Serial.println(Udp.remotePort());
   Serial.println("waiting for sync");
   setSyncProvider(getNtpTime);
-  setSyncInterval(6*SECS_PER_HOUR);
+  setSyncInterval(48*SECS_PER_HOUR);
 }
 
 // FS Related Functions
@@ -321,6 +338,8 @@ void readFile(fs::FS &fs, const char * path){
         return;
     }
 
+    Serial.print("SIZE: ");
+    Serial.println(file.size());
     Serial.println("- read from file:");
     while(file.available()){
         Serial.write(file.read());
@@ -384,8 +403,23 @@ void readProgram(fs::FS &fs, const char * path){
 
 }
 
-void StartProgram(const char *progname){
+void LoadProgram(const char *progname){
   strcpy(programFileName,progname);
+  debugLogSerial("[PROG] Loading program %s", programFileName);
+  char progpath[70];
+  strcpy(progpath,progDir);
+  strcat(progpath,programFileName); //Create programm path
+  readProgram(SPIFFS,progpath); //Read programm from file to array
+  programFullDuration = 0;
+  for (int i=0;i<prgArrayLength;i++){
+    programFullDuration += progArray[i].rise;
+    programFullDuration += progArray[i].hold;
+  }
+  debugLogSerial("[PROG] Programm duration %u minutes",programFullDuration);
+
+}
+
+void StartProgram(){
   programStart = true;
 }
 
@@ -429,8 +463,8 @@ void LoadSettings(fs::FS &fs){
 
   strcpy(ssid,doc["WiFi_SSID"]);
   strcpy(pass,doc["WiFi_Pass"]);
-  Serial.println(ssid);
-  Serial.println(pass);
+  //Serial.println(ssid);
+  //Serial.println(pass);
   WiFi_Mode = doc["WiFi_Mode"];
 
   LocalJS = doc["Local_JS"].as<int>();
@@ -440,7 +474,7 @@ void LoadSettings(fs::FS &fs){
 
   strcpy(NTP_Server1, doc["NTP_Server1"]);
   strcpy(NTP_Server2, doc["NTP_Server2"]);
-  GTM_TimeOffset = doc["GTM_TimeOffset"]; 
+  timeZone = doc["GTM_TimeOffset"]; 
   const char* Initial_Date2 = doc["Initial_Date"];
   memcpy(Initial_Date, Initial_Date2, 11);  
   strcpy(Initial_Time,doc["Initial_Time"]);
@@ -490,6 +524,7 @@ void LoadSettings(fs::FS &fs){
 
   debugLogSerial("Json readed from settings: ");
   serializeJsonPretty(doc,Serial);
+  debugLogSerial("");
 
 
 
@@ -504,7 +539,7 @@ void SaveSettings(fs::FS &fs){
   }
   confFile.close();
   fs.remove("/etc/config.txt");
-  File confFile1 = fs.open("/etc/config.txt",FILE_WRITE);
+  File confFile1 = fs.open("/etc/config.txt",FILE_WRITE,true);
   
   StaticJsonDocument<512> doct;
   doct["WiFi_SSID"] = ssid;
@@ -516,7 +551,7 @@ void SaveSettings(fs::FS &fs){
   doct["Auth_pass"] = Auth_pass;
   doct["NTP_Server1"] = NTP_Server1;
   doct["NTP_Server2"] = NTP_Server2;
-  doct["GTM_TimeOffset"] = GTM_TimeOffset;
+  doct["GTM_TimeOffset"] = timeZone;
   doct["Initial_Date"] = Initial_Date;
   doct["Initial_Time"] = Initial_Time;
   doct["PID_Kp"] = Kp;
@@ -544,7 +579,71 @@ void SaveSettings(fs::FS &fs){
   serializeJsonPretty(doct,Serial);
   serializeJsonPretty(doct,confFile1);
   confFile1.close();
+}
 
+void CreateLogFile(fs::FS &fs, time_t starttime){
+  char logfilepath[128];
+  char tempstring[64];
+  strcpy(logfilepath,"/logs/");
+  sprintf(tempstring,"%i",starttime);
+  strcat(logfilepath,tempstring);
+  strcat(logfilepath,".txt");
+  //Serial.println(starttime);
+  debugLogSerial("%s",logfilepath);
+  File logfile = fs.open(logfilepath,"w",true);
+  logfile.close();
+}
+
+void WriteLog(fs::FS &fs, time_t starttime, time_t currenttime){
+  char logfilepath[128];
+  char tempstring[64];
+  strcpy(logfilepath,"/logs/");
+  sprintf(tempstring,"%i",starttime);
+  strcat(logfilepath,tempstring);
+  strcat(logfilepath,".txt");
+  debugLogSerial("%s",logfilepath);
+  File logfile = fs.open(logfilepath,"a");
+  logfile.printf("%i, %f \n",currenttime,temperature);
+  logfile.flush();
+  logfile.close();
+
+}
+
+void ClearLogs(fs::FS &fs){
+  char logfilepath[128];
+  char tempstring[64];
+  uint8_t famount = 0;
+
+  Serial.printf("Listing directory: /logs\r\n");
+
+    File root = fs.open("/logs");
+
+    File file = root.openNextFile();
+    while(file){
+        if(file.isDirectory()){
+            Serial.print("  DIR : ");
+            Serial.println(file.name());
+        } else {
+            Serial.print("  FILE: ");
+            Serial.print(file.name());
+            Serial.print("\tSIZE: ");
+            Serial.println(file.size());
+            famount++;
+        }
+        file = root.openNextFile();
+    }
+    root.close();
+    file.close();
+
+    if (famount > LOG_FILE_LIMIT) {
+      root = fs.open("/logs");
+      file = root.openNextFile();
+      for (int i = 0; i<LOG_FILE_LIMIT;i++){
+        strcpy(logfilepath,file.path());
+        file = root.openNextFile();
+        fs.remove(logfilepath);
+      }
+    }
 
 }
 
@@ -586,7 +685,7 @@ void T_UpdateTemperature(void *params){
     if (!digitalRead(DRDY_PIN)) {
       temperature = PrimaryTempSensor.readThermocoupleTemperature();
       cjTemperature = PrimaryTempSensor.readCJTemperature();
-      debugLogSerial("[MAX31856] Temperature sensor A readout: Internal temp = %.1f \t Last temp = %.1f \t",cjTemperature,temperature);
+      //debugLogSerial("[MAX31856] Temperature sensor A readout: Internal temp = %.1f \t Last temp = %.1f \t",cjTemperature,temperature);
     }
 
     vTaskDelay(100/portTICK_PERIOD_MS);
@@ -616,7 +715,7 @@ void T_ControlHeater(void *params){
 
 // Programm loop
 void T_ProgramLoop(void *params){
-  uint16_t programFullDuration = 0; //Full programm duration in minutes
+  
   time_t stepStartTime = 0;
   time_t stepRiseEndTime = 0;
   time_t stepHoldEndTime = 0;
@@ -625,25 +724,14 @@ void T_ProgramLoop(void *params){
   double startTemp = 0;
   time_t t;
   time_t tempt;
+  time_t tempt2;
   uint8_t currentStep = 0; //Current step of programm
   uint16_t tau = 0;
 
   for (;;){
     //Code to start program
     if (programStart){
-      programFullDuration = 0;
-      debugLogSerial("[PROG] Startintg program %s", programFileName);
-      char progpath[70];
-      strcpy(progpath,progDir);
-      strcat(progpath,programFileName); //Create programm path
-      readProgram(SPIFFS,progpath); //Read programm from file to array
-      Serial.println(prgArrayLength);
-      for (int i=0;i<prgArrayLength;i++){
-        programFullDuration += progArray[i].rise;
-        programFullDuration += progArray[i].hold;
-        debugLogSerial("Program step contents: Target temperature = %f, Rise time = %u, Hold time=%u",progArray[i].temp,progArray[i].rise,progArray[i].hold);
-      }
-      debugLogSerial("[PROG] Programm duration %u minutes",programFullDuration);
+      debugLogSerial("[PROG] Starting program %s",programFileName);
       t = now();
       progStartTime = t;
       debugLogSerial("[PROG] Programm start time: %i:%i:%i %i.%i.%i",hour(t),minute(t),second(t),day(t),month(t),year(t));
@@ -652,10 +740,12 @@ void T_ProgramLoop(void *params){
       debugLogSerial("[PROG] Programm end time: %i:%i:%i %i.%i.%i",hour(t),minute(t),second(t),day(t),month(t),year(t));
       startTemp = temperature;
       debugLogSerial("[PROG] Program start temperature: %f C",startTemp);
+      CreateLogFile(SPIFFS,progStartTime);
       t = now();
       currentStep = 0;
       stepStartTime = t;
       tempt = t;
+      tempt2 = t;
       stepRiseEndTime = t+progArray[0].rise*SECS_PER_MIN;
       stepHoldEndTime = stepRiseEndTime + progArray[0].hold*SECS_PER_MIN;
       tau = discStep*progArray[currentStep].rise/RISE_DISCR_STEP;
@@ -708,6 +798,13 @@ void T_ProgramLoop(void *params){
         tempt = t;
         debugLogSerial("[PROG], %f, %i:%i:%i",Setpoint, hour(t),minute(t),second(t));
       }
+      //write log
+      if (t-tempt2 >= LOG_PERIOD) {
+        WriteLog(SPIFFS,progStartTime,t);
+        tempt2 = t;
+      }
+
+
 
       //debugLogSerial("[PROG], %f, %i:%i:%i",Setpoint, hour(t),minute(t),second(t));
 
@@ -716,6 +813,13 @@ void T_ProgramLoop(void *params){
     if (programEnd){
       programEnd = false;
       debugLogSerial("[PROG] Program ended");
+      char logfilepath[128];
+      char tempstring[64];
+      strcpy(logfilepath,"/logs/");
+      sprintf(tempstring,"%i",progStartTime);
+      strcat(logfilepath,tempstring);
+      strcat(logfilepath,".txt");
+      readFile(SPIFFS,logfilepath);
 
     }
 
