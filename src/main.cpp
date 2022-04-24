@@ -73,13 +73,15 @@ const char progDir[] = "/progs/";
 uint16_t prgArrayLength; //Length of programm array
 prgStep progArray[100]; //Array of programm steps. 100 steps max
 
-
+const char* PARAM_MESSAGE = "message";
+const char* PARAM_TEMP = "temp";
 
 //Objects
 Adafruit_MAX31856 PrimaryTempSensor = Adafruit_MAX31856(MAXCS);
 PID HeaterPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 WiFiUDP Udp;
 StaticJsonDocument<768> doc;
+AsyncWebServer server(80);
 
 /*----------------------MAIN CODE-------------------------*/
 /*--------------------------------------------------------*/
@@ -97,6 +99,7 @@ void setup() {
   SetupWifi();
   SetupNTPSync();
   SetupMax31856();
+  SetupServer();
   ClearLogs(SPIFFS);
   xTaskCreate(T_UpdateTemperature,"Temp update",8192,NULL,1,NULL);
   xTaskCreate(T_ProgramLoop,"Control loop",8192,NULL,1,NULL);
@@ -645,6 +648,119 @@ void ClearLogs(fs::FS &fs){
       }
     }
 
+}
+
+void SetupServer(){
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(200, "text/plain", "Hello, world");
+    });
+
+    // Send a GET request to <IP>/get?message=<message>
+    server.on("/get", HTTP_GET, [] (AsyncWebServerRequest *request) {
+        String message;
+        if (request->hasParam(PARAM_MESSAGE)) {
+            message = request->getParam(PARAM_MESSAGE)->value();
+        } 
+        if (request->hasParam(PARAM_TEMP)) {
+          message = temperature;
+        }
+        else {
+            message = "No message sent";
+        }
+        request->send(200, "text/plain", message);
+    });
+
+    server.on("/getstate", HTTP_GET, [] (AsyncWebServerRequest *request){
+      String resp;
+      if (request -> hasParam("temperature")){
+        resp = temperature;
+      }
+      else if (request -> hasParam("cj_temperature")){
+        resp = cjTemperature;
+      }
+      else if (request -> hasParam("setpoint")){
+        resp = Setpoint;
+      }
+      else if (request -> hasParam("fault")){
+        resp = primaryFault;
+      }
+      else {
+        resp = "No param specified";
+      }
+      request->send(200,"text/plain",resp);
+    });
+    server.on("/program",HTTP_GET,[] (AsyncWebServerRequest *request){
+      String resp;
+      if (request ->hasParam("state")){ //0 - no program running, 1 - program running, 
+        if (programRunning || programStart){
+          resp = "1";
+        } else if(strcmp(programFileName,"") != 0){
+          resp = "2";
+        }
+        else {
+          resp = "0";
+        }
+      } else if(request -> hasParam("proglist")){
+        resp = ProgramList(SPIFFS);
+        Serial.println(resp);
+      } else {
+        resp = "No param specified";
+      }
+      request->send(200,"text/plain",resp);
+    });
+
+    // Send a POST request to <IP>/post with a form field message set to <message>
+    server.on("/post", HTTP_POST, [](AsyncWebServerRequest *request){
+        String message;
+        if (request->hasParam(PARAM_MESSAGE, true)) {
+            message = request->getParam(PARAM_MESSAGE, true)->value();
+        } else {
+            message = "No message sent";
+        }
+        request->send(200, "text/plain", "Hello, POST: " + message);
+    });
+
+    server.onNotFound(NotFound);
+
+    server.begin();
+
+}
+
+void NotFound(AsyncWebServerRequest *request) {
+    request->send(404, "text/plain", "Not found");
+}
+
+String ProgramList(fs::FS &fs){
+    String response; 
+    response = String();
+    File root = fs.open("/progs");
+    if(!root){
+        Serial.println("- failed to open directory");
+        return "Error";
+    }
+    if(!root.isDirectory()){
+        Serial.println(" - not a directory");
+        return "Error";
+    }
+
+    File file = root.openNextFile();
+    while(file){
+        if(file.isDirectory()){
+            //Serial.print("  DIR : ");
+            //Serial.println(file.name());
+        } else {
+            Serial.print("  FILE: ");
+            Serial.print(file.name());
+            Serial.print("\tSIZE: ");
+            Serial.println(file.size());
+            response += file.name();
+            response += "\t";
+            response += file.size();
+            response += "\r\n";
+        }
+        file = root.openNextFile();
+    }
+    return response;
 }
 
 

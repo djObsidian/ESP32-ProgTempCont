@@ -83,5 +83,10 @@ void CreateLogFile(fs::FS &fs, time_t starttime);
 void WriteLog(fs::FS &fs, time_t starttime);
 void ClearLogs(fs::FS &fs);
 
+//server
+void SetupServer();
+void NotFound(AsyncWebServerRequest *request);
+String ProgramList(fs::FS &fs);
+
 //helpers
 double lerp(double x0, double x1, double y0, double y1, double x);
